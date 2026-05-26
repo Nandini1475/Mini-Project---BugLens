@@ -1,252 +1,345 @@
-from flask import Flask, render_template, request, jsonify
-import requests
-import sqlite3
-import time
+<!DOCTYPE html>
+<html>
+<head>
+<title>BugLens</title>
 
-app = Flask(__name__)
+<!-- ✅ remove favicon 404 -->
+<link rel="icon" href="data:,">
 
-# 🔴 OPTIONAL: add your GitHub token here
-GITHUB_TOKEN = " "
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;500;700&display=swap" rel="stylesheet">
 
+<style>
+body {
+    margin: 0;
+    font-family: 'Poppins', sans-serif;
+    background: linear-gradient(-45deg, #a18cd1, #fbc2eb, #fad0c4, #ff9a9e);
+    background-size: 400% 400%;
+    animation: gradientBG 25s ease infinite;
+}
 
-# ================= DATABASE =================
-def init_db():
-    conn = sqlite3.connect("issues.db")
-    c = conn.cursor()
+@keyframes gradientBG {
+    0% { background-position: 0% 50% }
+    50% { background-position: 100% 50% }
+    100% { background-position: 0% 50% }
+}
 
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS issues (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            state TEXT,
-            bug_type TEXT,
-            risk TEXT,
-            confidence REAL
-        )
-    ''')
+.container {
+    width: 90%;
+    margin: auto;
+    padding: 20px;
+}
 
-    conn.commit()
-    conn.close()
+h1 {
+    text-align: center;
+    font-size: 45px;
+    background: linear-gradient(90deg,#222,#000);
+    -webkit-background-clip: text;
+    color: transparent;
+}
 
+.card {
+    background: rgba(255,255,255,0.25);
+    padding: 20px;
+    border-radius: 20px;
+    margin-bottom: 20px;
+}
 
-def clear_db():
-    conn = sqlite3.connect("issues.db")
-    c = conn.cursor()
-    c.execute("DELETE FROM issues")
-    conn.commit()
-    conn.close()
+.input-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
 
+input {
+    width: 60%;
+    padding: 12px;
+    border-radius: 10px;
+    border: none;
+}
 
-# ================= BUG TYPE =================
-def get_bug_type(title):
-    t = title.lower()
+button {
+    padding: 10px 18px;
+    border-radius: 10px;
+    border: none;
+    background: #ff7eb3;
+    color: white;
+    cursor: pointer;
+}
 
-    if any(k in t for k in ["ui", "button", "layout", "css", "frontend"]):
-        return "UI Bug"
+.stats {
+    display: flex;
+    gap: 10px;
+}
 
-    elif any(k in t for k in ["crash", "error", "fail", "exception", "not working"]):
-        return "Functional Bug"
+.stat-box {
+    flex: 1;
+    background: rgba(255,255,255,0.4);
+    padding: 15px;
+    border-radius: 10px;
+    text-align: center;
+}
 
-    elif any(k in t for k in ["slow", "performance", "lag", "delay"]):
-        return "Performance Bug"
+.chart-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
 
-    elif any(k in t for k in ["security", "vulnerability", "attack", "auth"]):
-        return "Security Bug"
+canvas {
+    width: 420px !important;
+    height: 300px !important;
+}
 
-    elif any(k in t for k in ["compatibility", "browser", "device"]):
-        return "Compatibility Bug"
+.list {
+    max-height: 280px;
+    overflow-y: auto;
+}
 
-    elif any(k in t for k in ["network", "timeout", "connection"]):
-        return "Network Bug"
+.issue {
+    background: rgba(255,255,255,0.4);
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 10px;
+}
 
-    elif any(k in t for k in ["database", "db", "sql", "query"]):
-        return "Database Bug"
+.filters {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
 
-    elif any(k in t for k in ["memory", "leak", "overflow"]):
-        return "Memory Bug"
+.loader {
+    display:none;
+    text-align:center;
+}
 
-    elif any(k in t for k in ["api", "endpoint", "request", "response"]):
-        return "API Bug"
+.loader div{
+    width:40px;
+    height:40px;
+    border:5px solid white;
+    border-top:5px solid #ff7eb3;
+    border-radius:50%;
+    animation:spin 1s linear infinite;
+    margin:auto;
+}
 
-    elif any(k in t for k in ["logic", "calculation", "incorrect", "wrong"]):
-        return "Logic Bug"
+@keyframes spin{
+    100%{transform:rotate(360deg)}
+}
+</style>
+</head>
 
-    # 🔥 FORCE everything into Functional instead of "Other"
-    return "Functional Bug"
+<body>
 
+<div class="container">
 
-# ================= RISK =================
-def get_risk(title):
-    t = title.lower()
-    score = 0
+<h1>BugLens</h1>
 
-    if any(k in t for k in ["crash", "critical", "failure", "security"]):
-        score += 2
+<div class="card input-row">
+<input id="repo" placeholder="Paste repo link">
+<button onclick="fetchIssues()">Analyze</button>
+</div>
 
-    if any(k in t for k in ["slow", "delay", "performance"]):
-        score += 1
+<div id="loader" class="loader"><div></div></div>
 
-    if score >= 2:
-        return "High", 0.9
-    elif score == 1:
-        return "Medium", 0.75
-    else:
-        return "Low", 0.6
+<div class="stats">
+<div class="stat-box">Total<br><span id="total">0</span></div>
+<div class="stat-box">High<br><span id="high">0</span></div>
+<div class="stat-box">Medium<br><span id="medium">0</span></div>
+<div class="stat-box">Low<br><span id="low">0</span></div>
+</div>
 
+<div class="card chart-row">
+<div>
+<select id="chartType">
+<option value="pie">Pie</option>
+<option value="bar">Bar</option>
+<option value="line">Line</option>
+<option value="radar">Radar</option>
+<option value="polarArea">Polar</option>
+<option value="bubble">Bubble</option>
+<option value="scatter">Scatter</option>
+</select>
+<button onclick="loadChart()">Show</button>
+</div>
 
-# ================= FETCH =================
-def fetch_all_issues(owner_repo):
-    issues = []
-    url = f"https://api.github.com/repos/{owner_repo}/issues?state=all&per_page=100"
+<canvas id="chart"></canvas>
+</div>
 
-    headers = {"Accept": "application/vnd.github+json"}
+<div class="card">
 
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+<div class="filters">
+<button onclick="filter('all')">All</button>
+<button onclick="filter('High')">High</button>
+<button onclick="filter('Medium')">Medium</button>
+<button onclick="filter('Low')">Low</button>
+<button onclick="filter('fixed')">Fixed</button>
+<button onclick="filter('repeated')">Repeated</button>
+</div>
 
-    while url:
-        success = False
+<div id="list" class="list"></div>
 
-        for attempt in range(5):
-            try:
-                response = requests.get(url, headers=headers, timeout=60)
+</div>
 
-                if response.status_code == 200:
-                    success = True
-                    break
-                else:
-                    print("GitHub error:", response.text)
+</div>
 
-            except requests.exceptions.ReadTimeout:
-                print(f"Timeout... retry {attempt+1}")
-                time.sleep(2)
+<script>
 
-        if not success:
-            print("Retry failed, waiting and retrying same page...")
-            time.sleep(5)
-            continue
+let allData = [];
+let chart;
 
-        data = response.json()
-        if isinstance(data, dict) and "message" in data:
-            print("GitHub API error:", data["message"])
-            break
+// 🔴 MAIN FUNCTION
+function fetchIssues(){
+    const loader = document.getElementById("loader");
+    const repoInput = document.getElementById("repo").value;
 
-        if not data:
-            break
+    loader.style.display = "block";
 
-        filtered = [i for i in data if "pull_request" not in i]
-        issues.extend(filtered)
-
-        print("Fetched:", len(issues))
-
-        url = response.links.get("next", {}).get("url")
-        time.sleep(0.5)
-
-    print("TOTAL:", len(issues))
-    return issues
-
-
-# ================= ROUTES =================
-@app.route("/")
-def home():
-    return render_template("dashboard.html")
-
-
-@app.route("/fetch", methods=["POST"])
-def fetch():
-    repo = request.form.get("repo")
-    owner_repo = repo.replace("https://github.com/", "").replace(".git", "")
-
-    clear_db()
-
-    issues = fetch_all_issues(owner_repo)
-
-    conn = sqlite3.connect("issues.db")
-    c = conn.cursor()
-    seen_titles = set()
-
-    for issue in issues:
-        try:
-            title = str(issue.get("title", ""))
-            if title in seen_titles:
-                continue
-
-            seen_titles.add(title)
-
-            state = str(issue.get("state", ""))
-
-            bug_type = get_bug_type(title)
-            risk, confidence = get_risk(title)
-
-            c.execute(
-                "INSERT INTO issues (title, state, bug_type, risk, confidence) VALUES (?, ?, ?, ?, ?)",
-            (title, state, bug_type, risk, confidence)
-        )
-        except Exception as e:
-            print("Insert error:", e)
-        continue
-    print("Saving to database...")
-
-    conn.commit()
-    conn.close()
-
-    return jsonify({"status": "done"})
-
-
-@app.route("/data")
-def data():
-    conn = sqlite3.connect("issues.db")
-    c = conn.cursor()
-
-    c.execute("SELECT title, state, bug_type, risk, confidence FROM issues")
-    rows = c.fetchall()
-    print("ROWS FROM DB:", len(rows))
-
-    conn.close()
-
-    all_issues = []
-    summary_risk = {"High": 0, "Medium": 0, "Low": 0}
-    summary_bug_type = {
-        "UI Bug": 0,
-    "Functional Bug": 0,
-    "Performance Bug": 0,
-    "Security Bug": 0,
-    "Compatibility Bug": 0,
-    "Network Bug": 0,
-    "Database Bug": 0,
-    "Memory Bug": 0,
-    "API Bug": 0,
-    "Logic Bug": 0
+    if(!repoInput){
+        alert("Enter repo link");
+        loader.style.display = "none";
+        return;
     }
 
-    for r in rows:
-        issue = {
-            "title": r[0],
-            "state": r[1],
-            "bug_type": r[2],
-            "risk": r[3],
-            "confidence": round(r[4] * 100, 2)
-                
-        }
+    fetch("/fetch", {
+        method:"POST",
+        headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:"repo=" + encodeURIComponent(repoInput)
+    })
+    .then(res => res.json())
+    .then(() => {
+        loadChart();  // load only after backend finishes
+    })
+    .catch(err => {
+        console.error(err);
+        loader.style.display = "none";
+    });
+}
 
-        all_issues.append(issue)
+// 🔴 LOAD DATA
+function loadChart(){
+    fetch("/data")
+    .then(res => res.json())
+    .then(data => {
 
-            # ✅ risk count 
-        if r[3] in summary_risk:
-                summary_risk[r[3]] += 1
+        console.log("DATA:", data);
 
-            # ✅ bug type count
-        if r[2] in summary_bug_type:
-                summary_bug_type[r[2]] += 1
-        
-        
+        document.getElementById("loader").style.display="none";
 
-    return jsonify({
-    "all": all_issues,
-    "summary_risk": summary_risk,
-    "summary_bug_type": summary_bug_type
-})
+        allData = data.all || [];
 
-if __name__ == "__main__":
-    init_db()
-    app.run(debug=False)
+        document.getElementById("total").innerText = allData.length;
+
+        let risk = data.summary_risk || {High:0, Medium:0, Low:0};
+
+        document.getElementById("high").innerText = risk.High;
+        document.getElementById("medium").innerText = risk.Medium;
+        document.getElementById("low").innerText = risk.Low;
+
+        createChart(data);
+        showList(allData);
+    });
+}
+
+// 🔴 CHART
+function createChart(data){
+
+    const ctx = document.getElementById("chart").getContext("2d");
+    if(chart) chart.destroy();
+
+    const type = document.getElementById("chartType").value;
+
+    let bugTypes = data.summary_bug_type;
+
+    let labels = [
+       "UI Bug",
+       "Functional Bug",
+       "Performance Bug",
+       "Security Bug",
+       "Compatibility Bug",
+       "Network Bug",
+       "Database Bug",
+       "Memory Bug",
+       "API Bug",
+       "Logic Bug"
+    ];
+
+let values = labels.map(label => bugTypes[label] || 0);
+    if(type === "bubble" || type === "scatter"){
+        let bubbleData = values.map((v,i)=>({x:i+1,y:v,r:10}));
+
+        chart = new Chart(ctx,{
+            type:type,
+            data:{
+                datasets:[{
+                    label:"Bugs",
+                    data:bubbleData
+                }]
+            }
+        });
+    }
+    else{
+        chart = new Chart(ctx,{
+            type:type,
+            data:{
+                labels: labels,
+                datasets:[{
+                    label:"Bugs",
+                    data: values
+                }]
+            },
+            options:{
+                scales: {
+                    y: { beginAtZero: true }
+                }
+            }
+        });
+    }
+}
+
+// 🔴 LIST
+function showList(list){
+
+    if(!list || list.length === 0){
+        document.getElementById("list").innerHTML = "No issues found";
+        return;
+    }
+
+    let html = "";
+
+    list.forEach(i=>{
+        html += `
+        <div class="issue">
+            <b>${i.title}</b><br>
+            ${i.bug_type} | ${i.risk} (${i.confidence || 0}%)
+        </div>`;
+    });
+
+    document.getElementById("list").innerHTML = html;
+}
+
+// 🔴 FILTER
+function filter(type){
+
+    if(type==="all") return showList(allData);
+
+    if(type==="fixed")
+        return showList(allData.filter(i=>i.state==="closed"));
+
+    if(type==="repeated"){
+        let seen={}, rep=[];
+        allData.forEach(i=>{
+            if(seen[i.title]) rep.push(i);
+            else seen[i.title]=1;
+        });
+        return showList(rep);
+    }
+
+    showList(allData.filter(i=>i.risk===type));
+}
+
+</script>
+
+</body>
+</html>
