@@ -1,0 +1,252 @@
+from flask import Flask, render_template, request, jsonify
+import requests
+import sqlite3
+import time
+
+app = Flask(__name__)
+
+# 🔴 OPTIONAL: add your GitHub token here
+GITHUB_TOKEN = " "
+
+
+# ================= DATABASE =================
+def init_db():
+    conn = sqlite3.connect("issues.db")
+    c = conn.cursor()
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            state TEXT,
+            bug_type TEXT,
+            risk TEXT,
+            confidence REAL
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+
+def clear_db():
+    conn = sqlite3.connect("issues.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM issues")
+    conn.commit()
+    conn.close()
+
+
+# ================= BUG TYPE =================
+def get_bug_type(title):
+    t = title.lower()
+
+    if any(k in t for k in ["ui", "button", "layout", "css", "frontend"]):
+        return "UI Bug"
+
+    elif any(k in t for k in ["crash", "error", "fail", "exception", "not working"]):
+        return "Functional Bug"
+
+    elif any(k in t for k in ["slow", "performance", "lag", "delay"]):
+        return "Performance Bug"
+
+    elif any(k in t for k in ["security", "vulnerability", "attack", "auth"]):
+        return "Security Bug"
+
+    elif any(k in t for k in ["compatibility", "browser", "device"]):
+        return "Compatibility Bug"
+
+    elif any(k in t for k in ["network", "timeout", "connection"]):
+        return "Network Bug"
+
+    elif any(k in t for k in ["database", "db", "sql", "query"]):
+        return "Database Bug"
+
+    elif any(k in t for k in ["memory", "leak", "overflow"]):
+        return "Memory Bug"
+
+    elif any(k in t for k in ["api", "endpoint", "request", "response"]):
+        return "API Bug"
+
+    elif any(k in t for k in ["logic", "calculation", "incorrect", "wrong"]):
+        return "Logic Bug"
+
+    # 🔥 FORCE everything into Functional instead of "Other"
+    return "Functional Bug"
+
+
+# ================= RISK =================
+def get_risk(title):
+    t = title.lower()
+    score = 0
+
+    if any(k in t for k in ["crash", "critical", "failure", "security"]):
+        score += 2
+
+    if any(k in t for k in ["slow", "delay", "performance"]):
+        score += 1
+
+    if score >= 2:
+        return "High", 0.9
+    elif score == 1:
+        return "Medium", 0.75
+    else:
+        return "Low", 0.6
+
+
+# ================= FETCH =================
+def fetch_all_issues(owner_repo):
+    issues = []
+    url = f"https://api.github.com/repos/{owner_repo}/issues?state=all&per_page=100"
+
+    headers = {"Accept": "application/vnd.github+json"}
+
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+    while url:
+        success = False
+
+        for attempt in range(5):
+            try:
+                response = requests.get(url, headers=headers, timeout=60)
+
+                if response.status_code == 200:
+                    success = True
+                    break
+                else:
+                    print("GitHub error:", response.text)
+
+            except requests.exceptions.ReadTimeout:
+                print(f"Timeout... retry {attempt+1}")
+                time.sleep(2)
+
+        if not success:
+            print("Retry failed, waiting and retrying same page...")
+            time.sleep(5)
+            continue
+
+        data = response.json()
+        if isinstance(data, dict) and "message" in data:
+            print("GitHub API error:", data["message"])
+            break
+
+        if not data:
+            break
+
+        filtered = [i for i in data if "pull_request" not in i]
+        issues.extend(filtered)
+
+        print("Fetched:", len(issues))
+
+        url = response.links.get("next", {}).get("url")
+        time.sleep(0.5)
+
+    print("TOTAL:", len(issues))
+    return issues
+
+
+# ================= ROUTES =================
+@app.route("/")
+def home():
+    return render_template("dashboard.html")
+
+
+@app.route("/fetch", methods=["POST"])
+def fetch():
+    repo = request.form.get("repo")
+    owner_repo = repo.replace("https://github.com/", "").replace(".git", "")
+
+    clear_db()
+
+    issues = fetch_all_issues(owner_repo)
+
+    conn = sqlite3.connect("issues.db")
+    c = conn.cursor()
+    seen_titles = set()
+
+    for issue in issues:
+        try:
+            title = str(issue.get("title", ""))
+            if title in seen_titles:
+                continue
+
+            seen_titles.add(title)
+
+            state = str(issue.get("state", ""))
+
+            bug_type = get_bug_type(title)
+            risk, confidence = get_risk(title)
+
+            c.execute(
+                "INSERT INTO issues (title, state, bug_type, risk, confidence) VALUES (?, ?, ?, ?, ?)",
+            (title, state, bug_type, risk, confidence)
+        )
+        except Exception as e:
+            print("Insert error:", e)
+        continue
+    print("Saving to database...")
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "done"})
+
+
+@app.route("/data")
+def data():
+    conn = sqlite3.connect("issues.db")
+    c = conn.cursor()
+
+    c.execute("SELECT title, state, bug_type, risk, confidence FROM issues")
+    rows = c.fetchall()
+    print("ROWS FROM DB:", len(rows))
+
+    conn.close()
+
+    all_issues = []
+    summary_risk = {"High": 0, "Medium": 0, "Low": 0}
+    summary_bug_type = {
+        "UI Bug": 0,
+    "Functional Bug": 0,
+    "Performance Bug": 0,
+    "Security Bug": 0,
+    "Compatibility Bug": 0,
+    "Network Bug": 0,
+    "Database Bug": 0,
+    "Memory Bug": 0,
+    "API Bug": 0,
+    "Logic Bug": 0
+    }
+
+    for r in rows:
+        issue = {
+            "title": r[0],
+            "state": r[1],
+            "bug_type": r[2],
+            "risk": r[3],
+            "confidence": round(r[4] * 100, 2)
+                
+        }
+
+        all_issues.append(issue)
+
+            # ✅ risk count 
+        if r[3] in summary_risk:
+                summary_risk[r[3]] += 1
+
+            # ✅ bug type count
+        if r[2] in summary_bug_type:
+                summary_bug_type[r[2]] += 1
+        
+        
+
+    return jsonify({
+    "all": all_issues,
+    "summary_risk": summary_risk,
+    "summary_bug_type": summary_bug_type
+})
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=False)
