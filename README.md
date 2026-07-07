@@ -1,6 +1,6 @@
 BugLens – GitHub Bug Pattern Analyzer
 
-BugLens is a Flask-based web application that fetches GitHub repository issues, classifies bug types, predicts risk levels, and visualizes bug analytics using interactive charts and graphs.
+BugLens is a Flask-based web application that fetches GitHub repository issues, classifies bug types, predicts risk levels, and visualizes bug analytics using interactive charts and graphs, helps in decision making.
 
 ---
 
